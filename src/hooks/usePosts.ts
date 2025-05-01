@@ -1,81 +1,89 @@
-import { useState } from "react"
-import { Post } from "../types/Post"
-import { PostInput } from "../types/PostInput"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { postApi } from "@/features/posts/api/postApi"
+import { commentApi } from "@/features/posts/api/commentApi" 
+import { PostInput } from "@/features/posts/PostInput"
+import { Post } from "@/entities/post/types"
 
-export const usePosts = () => {
-  const [posts, setPosts] = useState<Post[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(false)
+export const usePosts = (options: {
+  skip: number
+  limit: number
+  sortBy?: string
+  sortOrder?: string
+  tag?: string
+}) => {
+  const queryClient = useQueryClient()
 
-  const fetchPosts = async ({ skip = 0, limit = 10 }: { skip: number; limit: number }) => {
-    setLoading(true)
+  // 게시물 목록
+  const postsQuery = useQuery({
+    queryKey: ["posts", options],
+    queryFn: () =>
+      postApi.fetchPosts(
+        options.skip,
+        options.limit,
+        options.sortBy,
+        options.sortOrder,
+        options.tag
+      ),
+    staleTime: 1000 * 60,
+  })
+
+  // 게시물 추가
+  const addMutation = useMutation({
+    mutationFn: (newPost: PostInput) => postApi.addPost(newPost),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["posts", options] });
+    },
+  })
+
+  // 게시물 수정
+  const updateMutation = useMutation({
+    mutationFn: (post: Post) => postApi.updatePost(post),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["posts", options] });
+    },
+  })
+
+  // 게시물 삭제
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => postApi.deletePost(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["posts", options] });
+    },
+  })
+
+  // ✅ 검색 기능
+  const searchPosts = async (query: string) => {
     try {
-      const postsRes = await fetch(`/api/posts?limit=${limit}&skip=${skip}`)
-      const postsData = await postsRes.json()
-
-      const usersRes = await fetch("/api/users?limit=0&select=username,image")
-      const usersData = await usersRes.json()
-
-      const postsWithAuthors: Post[] = postsData.posts.map((post: Post) => ({
-        ...post,
-        author: usersData.users.find((user) => user.id === post.userId),
-      }))
-
-      setPosts(postsWithAuthors)
-      setTotal(postsData.total)
+      const res = await postApi.searchPosts(query)
+      return res
     } catch (err) {
-      console.error("게시물 불러오기 오류:", err)
-    } finally {
-      setLoading(false)
+      console.error("검색 오류:", err)
+      return []
     }
   }
 
-  const addPost = async (newPost: PostInput) => {
+  // ✅ 상세 보기용 fetch (상태는 외부 컴포넌트에서 관리)
+  const fetchPostDetail = async (postId: number) => {
     try {
-      const res = await fetch("/api/posts/add", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newPost),
-      })
-      const data: Post = await res.json()
-      setPosts((prev) => [data, ...prev])
+      const post = await postApi.fetchPostById(postId)
+      const comments = await commentApi.fetchByPostId(postId)  // 또는 commentApi
+      return { post, comments }
     } catch (err) {
-      console.error("게시물 추가 오류:", err)
-    }
-  }
-
-  const updatePost = async (updatedPost: Post) => {
-    try {
-      const res = await fetch(`/api/posts/${updatedPost.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updatedPost),
-      })
-      const data: Post = await res.json()
-      setPosts((prev) =>
-        prev.map((post) => (post.id === data.id ? data : post))
-      )
-    } catch (err) {
-      console.error("게시물 수정 오류:", err)
-    }
-  }
-
-  const deletePost = async (id: number) => {
-    try {
-      await fetch(`/api/posts/${id}`, { method: "DELETE" })
-      setPosts((prev) => prev.filter((post) => post.id !== id))
-    } catch (err) {
-      console.error("게시물 삭제 오류:", err)
+      console.error("상세 보기 오류:", err)
+      return null
     }
   }
 
   return {
-    posts,
-    total,
-    loading,
-    fetchPosts,
-    addPost,
-    updatePost,
-    deletePost,
+    posts: postsQuery.data?.posts ?? [],
+    total: postsQuery.data?.total ?? 0,
+    loading: postsQuery.isLoading,
+    fetchError: postsQuery.error,
+    addPost: addMutation.mutate,
+    updatePost: updateMutation.mutate,
+    deletePost: deleteMutation.mutate,
+    searchPosts, // ✅ 외부에서 호출 가능
+    fetchPostDetail, // ✅ 외부에서 호출 가능
+    fetchPosts: postApi.fetchPosts,
   }
 }
